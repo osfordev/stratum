@@ -1,0 +1,488 @@
+#!/bin/bash
+#
+
+VERSION="0.0.1"
+
+#
+# ~/.stratum
+# └── <IMAGE_TAG>
+#     ├── DATA
+#     └── MANIFEST
+#
+
+CONST_BUILD_DIR=/run/stratum/build
+CONST_BOUNDS_DIR=/run/stratum/bound
+CONST_IMAGES_DIR=/run/stratum/images
+CONST_STATE_DIR=/run/stratum/state
+CONST_REPOSITORY_URL=http://dl.zxteam.net/stratum/
+
+function render_usage() {
+	echo >&2
+	echo "	Usage example:" >&2
+	echo >&2
+	echo "		$0 build --tag=repository:X.Y.Z --file=./STRATUMFILE.sh" >&2
+	echo "		$0 mount repository:X.Y.Z /path/to/mount" >&2
+	echo "		$0 umount /path/to/mount" >&2
+	echo >&2
+}
+
+function info() {
+	if [ -z "$QUIET" ]; then
+		echo " [I] $1" >&2
+	fi
+}
+function warn() {
+	echo " [W] $1" >&2
+}
+function fatal() {
+	echo " [!] FATAL ERROR: $1" >&2
+	exit 1
+}
+
+function ensure_data_dirs() {
+	if [ ! -d "${CONST_BUILD_DIR}" ]; then
+		mkdir -p "${CONST_BUILD_DIR}" || fatal "Failure create build dir ${CONST_BUILD_DIR}"
+		info "${CONST_BUILD_DIR} build directory was created"
+	fi
+
+	if [ ! -d "${CONST_BOUNDS_DIR}" ]; then
+		mkdir -p "${CONST_BOUNDS_DIR}" || fatal "Failure create build dir ${CONST_BOUNDS_DIR}"
+		info "${CONST_BOUNDS_DIR} build directory was created"
+	fi
+
+	if [ ! -d "${CONST_IMAGES_DIR}" ]; then
+		mkdir -p "${CONST_IMAGES_DIR}" || fatal "Failure create images dir ${CONST_IMAGES_DIR}"
+		info "${CONST_IMAGES_DIR} images directory was created"
+	fi
+
+	if [ ! -d "${CONST_STATE_DIR}" ]; then
+		mkdir -p "${CONST_STATE_DIR}" || fatal "Failure create build dir ${CONST_STATE_DIR}"
+		info "${CONST_STATE_DIR} build directory was created"
+	fi
+}
+
+function download_image() {
+	local IMAGE_TAG="$1"
+	if [ -z "${IMAGE_TAG}" ]; then
+		return 127
+	fi
+
+	# TODO chech IMAGE_TAG by regexp
+
+	local LOCAL_IMAGE_DIR="${CONST_IMAGES_DIR}/${IMAGE_TAG}"
+	if [ ! -d "${LOCAL_IMAGE_DIR}" ]; then
+
+		local LOCAL_IMAGE_DIR_TEMP="${CONST_IMAGES_DIR}/${IMAGE_TAG}.tmp"
+		if [ -d "${LOCAL_IMAGE_DIR_TEMP}" ]; then
+			fatal "Cannot download image due temporary '${LOCAL_IMAGE_DIR_TEMP}' directory already exist."
+		fi
+
+		# TODO lockfile
+
+		local IMAGE_MANIFEST_URL="${CONST_REPOSITORY_URL}images/${IMAGE_TAG}/MANIFEST"
+		local IMAGE_DATA_URL="${CONST_REPOSITORY_URL}images/${IMAGE_TAG}/DATA"
+
+		mkdir -p "${LOCAL_IMAGE_DIR_TEMP}"
+		info "Downloading MANIFEST of ${IMAGE_TAG} ..."
+		curl "${IMAGE_MANIFEST_URL}" --fail --output "${LOCAL_IMAGE_DIR_TEMP}/MANIFEST"
+		if [ $? -ne 0 ]; then
+			rm -rf "${LOCAL_IMAGE_DIR_TEMP}"
+			fatal "Failure download MANIFEST of image ${IMAGE_TAG}"
+		fi
+		echo
+		info "Downloading DATA of ${IMAGE_TAG} ..."
+		curl "${IMAGE_DATA_URL}"     --fail --output "${LOCAL_IMAGE_DIR_TEMP}/DATA"
+		if [ $? -ne 0 ]; then
+			rm -rf "${LOCAL_IMAGE_DIR_TEMP}"
+			fatal "Failure download DATA of image ${IMAGE_TAG}"
+		fi
+		echo
+
+		mv "${LOCAL_IMAGE_DIR_TEMP}" "${LOCAL_IMAGE_DIR}"
+
+		info "Image ${IMAGE_TAG} was downloaded successfully."
+
+	else
+		echo "Image ${IMAGE_TAG} already exist. Skip download. Use '--force-pull' argument to force download."
+	fi
+}
+
+function download_image_recursive() {
+	local IMAGE_TAG="$1"
+	if [ -z "${IMAGE_TAG}" ]; then
+		return 127
+	fi
+
+	# TODO chech IMAGE_TAG by regexp
+
+	local LOCAL_IMAGE_DIR="${CONST_IMAGES_DIR}/${IMAGE_TAG}"
+	if [ ! -d "${LOCAL_IMAGE_DIR}" ]; then
+
+		local LOCAL_IMAGE_DIR_TEMP="${CONST_IMAGES_DIR}/${IMAGE_TAG}.tmp"
+		if [ -d "${LOCAL_IMAGE_DIR_TEMP}" ]; then
+			echo "Cannot download image due temporary '${LOCAL_IMAGE_DIR_TEMP}' directory already exist." >&2
+			return 126
+		fi
+
+		# TODO lockfile
+
+		local IMAGE_MANIFEST_URL="${CONST_REPOSITORY_URL}images/${IMAGE_TAG}/MANIFEST"
+		local IMAGE_DATA_URL="${CONST_REPOSITORY_URL}images/${IMAGE_TAG}/DATA"
+
+		mkdir -p "${LOCAL_IMAGE_DIR_TEMP}"
+		echo "Downloading MANIFEST of ${IMAGE_TAG} ..."
+		curl "${IMAGE_MANIFEST_URL}" --output "${LOCAL_IMAGE_DIR_TEMP}/MANIFEST"
+		echo
+		echo "Downloading DATA of ${IMAGE_TAG} ..."
+		curl "${IMAGE_DATA_URL}"     --output "${LOCAL_IMAGE_DIR_TEMP}/DATA"
+		echo
+
+		mv "${LOCAL_IMAGE_DIR_TEMP}" "${LOCAL_IMAGE_DIR}"
+
+		echo "Image ${IMAGE_TAG} was downloaded successfully."
+
+	else
+		echo "Image ${IMAGE_TAG} already exist. Skip download. Use '--force-pull' argument to force download."
+	fi
+
+	local MANIFEST_FILE="${LOCAL_IMAGE_DIR}/MANIFEST"
+	local BASE_IMAGE_TAG=$(cat "${MANIFEST_FILE}" | grep -e "^BASE: " | rev | cut -d' ' -f1 | rev)
+	if [ -n "${BASE_IMAGE_TAG}" ]; then
+		download_image_recursive "${BASE_IMAGE_TAG}"
+	fi
+}
+
+function concat_image_layers() {
+	local IMAGE_TAG="$1"
+	if [ -z "${IMAGE_TAG}" ]; then
+		return 127
+	fi
+
+	local LOCAL_IMAGE_DIR="${CONST_IMAGES_DIR}/${IMAGE_TAG}"
+
+	if [ ! -d "${LOCAL_IMAGE_DIR}" ]; then
+		return 125
+	fi
+
+	local MANIFEST_FILE="${LOCAL_IMAGE_DIR}/MANIFEST"
+	local BASE_IMAGE_TAG=$(cat "${MANIFEST_FILE}" | grep -e "^BASE: " | rev | cut -d' ' -f1 | rev)
+	if [ -n "${BASE_IMAGE_TAG}" ]; then
+		local BASE_LAYERS=$(concat_image_layers "${BASE_IMAGE_TAG}")
+		echo "${LOCAL_IMAGE_DIR}/DATA,${BASE_LAYERS}"
+	fi
+
+	echo "${LOCAL_IMAGE_DIR}/DATA"
+}
+
+function resolve_image_hash() {
+	local TARGET_IMAGE_ID="$1"
+
+	if [[ "${TARGET_IMAGE_ID}" =~ ^[0-9a-f]{64}$ ]]; then
+		echo "${TARGET_IMAGE_ID}"
+		return
+	fi
+
+	local IMAGE_MANIFEST_FILE="${CONST_IMAGES_DIR}/${TARGET_IMAGE_ID}/MANIFEST"
+	if [ -f "${IMAGE_MANIFEST_FILE}" ]; then
+		info "Resolving image ${TARGET_IMAGE_ID} hash from local storage ${IMAGE_MANIFEST_FILE}"
+
+		local TARGET_IMAGE_HASH=
+		TARGET_IMAGE_HASH=$(cat "${IMAGE_MANIFEST_FILE}" | grep -e "^SHA256: " | head -n 1 | rev | cut -d' ' -f1 | rev)
+		echo -n "${TARGET_IMAGE_HASH}"
+
+		return
+	fi
+
+	local URL_ESCAPED_TARGET_IMAGE_ID=$(echo "${TARGET_IMAGE_ID}" | sed "s/#/%23/g")
+	local IMAGE_MANIFEST_URL="${CONST_REPOSITORY_URL}images/${URL_ESCAPED_TARGET_IMAGE_ID}/MANIFEST"
+	info "Resolving image ${TARGET_IMAGE_ID} hash from remote ${IMAGE_MANIFEST_URL}"
+	local REMOTE_MANIFEST_DATA=
+	REMOTE_MANIFEST_DATA=$(curl --fail --silent "${IMAGE_MANIFEST_URL}")
+
+	local TARGET_IMAGE_HASH=
+	TARGET_IMAGE_HASH=$(echo "${REMOTE_MANIFEST_DATA}" | grep -e "^SHA256: " | head -n 1 | rev | cut -d' ' -f1 | rev)
+	echo -n "${TARGET_IMAGE_HASH}"
+}
+
+
+function main_build() {
+	local TAG=
+	local STRATUMFILE=$(pwd)/Stratumfile.sh
+
+	# Parse args
+	while [ "$1" != "" ]; do
+		case "$1" in
+			--file)
+				STRATUMFILE=$(echo "$1" | cut -d= -f2)
+				;;
+			--tag)
+				TAG=$(echo "$1" | cut -d= -f2)
+				;;
+			*)
+				echo "Unexpected parameter $1" >&2
+				exit 42
+				;;
+		esac
+		shift
+	done
+
+	if [ -z "${TAG}" ]; then
+		if [ "$(uname)" = "Darwin" ]; then
+			#  Mac OS X platform
+			TAG="tag"$(hexdump -n 8 -v -e '8/1 "%02X" "\n"' /dev/urandom | tr '[:upper:]' '[:lower:]')
+		else
+			TAG="tag"$(hexdump --length 8 --no-squeezing --format '8/1 "%02X" "\n"' /dev/urandom | tr '[:upper:]' '[:lower:]')
+		fi
+	fi
+
+	local 
+
+	local BASE_IMAGE_HASH=$(cat "${STRATUMFILE}" | grep -e "^# MANIFEST BASE: " | rev | cut -d' ' -f1 | rev)
+	if [ "${BASE_IMAGE_HASH}" == "scratch" ]; then
+		echo "The image 'scratch' is not supported yet." >&2
+		exit -127
+	else
+		main_pull "${BASE_IMAGE_HASH}"
+
+		local BASE_LAYERS=
+		BASE_LAYERS=$(concat_image_layers "${BASE_IMAGE_TAG}")
+		local BASE_LAYERS_ERRCODE=$?
+		echo "BASE_LAYERS_ERRCODE = ${BASE_LAYERS_ERRCODE}"
+		if [ ${BASE_LAYERS_ERRCODE} -ne 0 ]; then
+			exit ${BASE_LAYERS_ERRCODE}
+		fi
+
+		echo "BASE_LAYERS: ${BASE_LAYERS}"
+	fi
+
+# mount --types squashfs --options loop,ro layer0.image/DATA layer0
+# mount --types squashfs --options loop,ro layer1.image/DATA layer1
+# mount --types squashfs --options loop,ro layer2.image/DATA layer2
+# mount --types overlay --options lowerdir=layer2:layer1:layer0,workdir=workdir,upperdir=layer3 none /mnt/gentoo/
+# mksquashfs layer1/ layer1.image/DATA
+# sha256sum layer1.image/DATA >> layer1.image/MANIFEST 
+
+}
+
+function main_hash() {
+	local TARGET_IMAGE_HASH=
+	TARGET_IMAGE_HASH=$(resolve_image_hash "$1")
+	echo "${TARGET_IMAGE_HASH}"
+}
+
+function main_pull() {
+	local TARGET_IMAGE_ID="$1"
+
+	if [ -z "${TARGET_IMAGE_ID}" ]; then
+		render_usage
+		exit 1
+	fi
+
+	ensure_data_dirs
+
+	local TARGET_IMAGE_HASH=
+	if [[ "${TARGET_IMAGE_ID}" =~ ^[0-9a-f]{64}$ ]]; then
+		TARGET_IMAGE_HASH="${TARGET_IMAGE_ID}"
+	else
+		TARGET_IMAGE_HASH=$(resolve_image_hash "${TARGET_IMAGE_ID}")
+	fi
+
+	info "Pulling image ${TARGET_IMAGE_HASH} ..."
+
+	local LAYER_NUMBER=0
+	local NEXT_IMAGE_HASH="${TARGET_IMAGE_HASH}"
+	local LOWERDIRS=
+
+	while [ -n "${NEXT_IMAGE_HASH}" ]; do
+		local IMAGE_DIR="${CONST_IMAGES_DIR}/${NEXT_IMAGE_HASH}"
+		local IMAGE_MANIFEST_FILE="${IMAGE_DIR}/MANIFEST"
+		local IMAGE_DATA_FILE="${IMAGE_DIR}/DATA"
+
+		if [ -d "${IMAGE_DIR}" ]; then
+			if [ ! -f "${IMAGE_MANIFEST_FILE}" -o ! -f "${IMAGE_DATA_FILE}" ]; then
+				rm -rf "${IMAGE_DIR}" || fatal "Failure remove broken image dir \"${IMAGE_DIR}\""
+			fi
+		fi
+
+		if [ ! -d "${IMAGE_DIR}" ]; then
+			download_image "${NEXT_IMAGE_HASH}"
+		else
+			info "${NEXT_IMAGE_HASH} already exist"
+		fi
+
+		local BASE_IMAGE_HASH=$(cat "${IMAGE_MANIFEST_FILE}" | grep -e "^BASE: " | head -n 1 | rev | cut -d' ' -f1 | rev)
+
+		NEXT_IMAGE_HASH="${BASE_IMAGE_HASH}"
+	done
+
+	if [[ ! "${TARGET_IMAGE_ID}" =~ ^[0-9a-f]{64}$ ]]; then
+		info "Link image tag ${TARGET_IMAGE_ID} to ${TARGET_IMAGE_HASH}"
+		ln -sf "${TARGET_IMAGE_HASH}" "${CONST_IMAGES_DIR}/${TARGET_IMAGE_ID}"
+	fi
+}
+
+function main_mount() {
+	local TARGET_IMAGE_ID="$1"
+	local MOUNTPOINT="$2"
+
+	if [ -z "${TARGET_IMAGE_ID}" -o -z "${MOUNTPOINT}" ]; then
+		render_usage
+		exit 1
+	fi
+
+	ensure_data_dirs
+
+	local TARGET_IMAGE_HASH=
+	if [[ "${TARGET_IMAGE_ID}" =~ ^[0-9a-f]{64}$ ]]; then
+		TARGET_IMAGE_HASH="${TARGET_IMAGE_ID}"
+	else
+		TARGET_IMAGE_HASH=$(resolve_image_hash "${TARGET_IMAGE_ID}")
+	fi
+
+	main_pull "${TARGET_IMAGE_HASH}"
+
+	info "Mounting images..."
+
+	local FULL_MOUNTPOINT=
+	FULL_MOUNTPOINT=$(readlink -f "${MOUNTPOINT}") || fatal "Failure to resolve full mountpoint path"
+
+	local FULL_MOUNTPOINT_HASH=
+	FULL_MOUNTPOINT_HASH=$(echo "${FULL_MOUNTPOINT}" | sha256sum | cut -d' ' -f1)
+
+	if [ -f "${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}/.mountpoint" ]; then
+		fatal "Unable mount same mountpoint '${FULL_MOUNTPOINT_HASH}' twice."
+	fi
+
+	if [ ! -d "${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}" ]; then
+		mkdir "${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}" || fatal "Failure create state dir ${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}"
+		info "${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH} state directory was created"
+	fi
+
+	local IMAGE_HASH="${TARGET_IMAGE_HASH}"
+	local LOWERDIRS=
+
+	while [ -n "${IMAGE_HASH}" ]; do
+		local IMAGE_DIR="${CONST_IMAGES_DIR}/${IMAGE_HASH}"
+		local IMAGE_MANIFEST_FILE="${IMAGE_DIR}/MANIFEST"
+		local IMAGE_DATA_FILE="${IMAGE_DIR}/DATA"
+		local BOUND_DIR="${CONST_BOUNDS_DIR}/${IMAGE_HASH}"
+
+		if [ ! -d "${BOUND_DIR}" ]; then
+			mkdir "${BOUND_DIR}" || fatal "Failure create layer dir ${STATE_DIR}"
+			info "${BOUND_DIR} layer directory was created"
+		fi
+
+		if grep -qs " ${BOUND_DIR} " /proc/mounts; then
+			info "${IMAGE_DATA_FILE} layer image already mounted to \"${BOUND_DIR}\""
+		else
+			mount -t squashfs -o ro,loop "${IMAGE_DATA_FILE}" "${BOUND_DIR}" || fatal "Failure mount layer \"${IMAGE_DATA_FILE}\" to \"${BOUND_DIR}\""
+			info "${IMAGE_DATA_FILE} layer image was mounted to \"${BOUND_DIR}\""
+		fi
+
+		if [ -n "${LOWERDIRS}" ]; then
+			LOWERDIRS="${LOWERDIRS}:${BOUND_DIR}"
+		else
+			LOWERDIRS="${BOUND_DIR}"
+		fi
+
+		local BASE_IMAGE_HASH=$(cat "${IMAGE_MANIFEST_FILE}" | grep -e "^BASE: " | rev | cut -d' ' -f1 | rev)
+
+		IMAGE_HASH="${BASE_IMAGE_HASH}"
+	done
+
+	local WORK_DIR="${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}/work"
+
+	if [ ! -d "${WORK_DIR}" ]; then
+		mkdir "${WORK_DIR}" || fatal "Failure create layer dir ${WORK_DIR}"
+		info "${WORK_DIR} work directory was created"
+	fi
+
+	local TOP_DIR="${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}/top"
+
+	if [ ! -d "${TOP_DIR}" ]; then
+		mkdir "${TOP_DIR}" || fatal "Failure create layer dir ${TOP_DIR}"
+		info "${TOP_DIR} top directory was created"
+	fi
+
+	# Save mountpoint info for future umount
+	echo "${MOUNTPOINT}" > "${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}/.mountpoint"
+
+	mount -t overlay -o "lowerdir=${LOWERDIRS},workdir=${WORK_DIR},upperdir=${TOP_DIR}" none "${MOUNTPOINT}" || fatal "Failure mount overlay \"${MOUNTPOINT}\" based on ${LOWERDIRS}"
+	info "Image ${TARGET_IMAGE_HASH} was mounted to ${MOUNTPOINT}"
+}
+
+function main_umount() {
+	local MOUNTPOINT="$1"
+
+	if [ -z "${MOUNTPOINT}" ]; then
+		render_usage
+		exit 1
+	fi
+
+	local FULL_MOUNTPOINT=
+	FULL_MOUNTPOINT=$(readlink -f "${MOUNTPOINT}") || fatal "Failure to resolve full mountpoint path"
+
+	local FULL_MOUNTPOINT_HASH=
+	FULL_MOUNTPOINT_HASH=$(echo "${FULL_MOUNTPOINT}" | sha256sum | cut -d' ' -f1)
+
+	if [ ! -f "${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}/.mountpoint" ]; then
+		fatal "Mountpoint not found"
+	fi
+
+	umount "${FULL_MOUNTPOINT}" || fatal "Failure umount ${FULL_MOUNTPOINT}"
+	rm "${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}/.mountpoint" || fatal "Failure delete mountpoint file ${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}/.mountpoint"
+
+	local WORK_DIR="${CONST_STATE_DIR}/${FULL_MOUNTPOINT_HASH}/work"
+	rm -rf "${WORK_DIR}" || fatal "Failure delete work directory ${WORK_DIR}"
+}
+
+function main() {
+	# Parse options (--xxxxx)
+	while [ "$1" != "" ]; do
+		case "$1" in
+			--*)
+				# NOP
+				;;
+			*)
+				break
+				;;
+		esac
+		shift
+	done
+
+	local LAUNCH_MODE=""
+
+	case "$1" in
+		build)
+			LAUNCH_MODE="build"
+			;;
+		hash)
+			LAUNCH_MODE="hash"
+			;;
+		mount)
+			LAUNCH_MODE="mount"
+			;;
+		pull)
+			LAUNCH_MODE="pull"
+			;;
+		umount)
+			LAUNCH_MODE="umount"
+			;;
+		-v|--version)
+			echo "Gentoo Stager version ${VERSION}";
+			exit 0
+			;;
+	esac
+
+	shift
+
+	if [ -z "${LAUNCH_MODE}" ]; then
+		render_usage
+		exit 0
+	else
+		main_${LAUNCH_MODE} $*
+	fi
+}
+
+
+main $*
