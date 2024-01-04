@@ -254,14 +254,6 @@ function main_build() {
 
 		echo "BASE_LAYERS: ${BASE_LAYERS}"
 	fi
-
-# mount --types squashfs --options loop,ro layer0.image/DATA layer0
-# mount --types squashfs --options loop,ro layer1.image/DATA layer1
-# mount --types squashfs --options loop,ro layer2.image/DATA layer2
-# mount --types overlay --options lowerdir=layer2:layer1:layer0,workdir=workdir,upperdir=layer3 none /mnt/gentoo/
-# mksquashfs layer1/ layer1.image/DATA
-# sha256sum layer1.image/DATA >> layer1.image/MANIFEST 
-
 }
 
 function main_hash() {
