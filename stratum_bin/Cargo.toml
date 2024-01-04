@@ -1,0 +1,10 @@
+[package]
+name = "stratum_bin"
+version = "0.1.0"
+authors = ["maxim.anurin"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+stratum_lib = { path = "../stratum_lib" }

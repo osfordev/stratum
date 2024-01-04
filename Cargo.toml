@@ -1,0 +1,9 @@
+[workspace]
+
+resolver = "2"
+
+members = [
+    "stratum_bin",
+    "stratum_cdylib",
+    "stratum_lib"
+]

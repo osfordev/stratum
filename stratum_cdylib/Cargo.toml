@@ -1,0 +1,19 @@
+[package]
+name = "stratum_cdylib"
+version = "0.1.0"
+authors = ["maxim.anurin"]
+edition = "2021"
+
+[lib]
+name = "stratum"
+path = "src/lib.rs"
+crate-type = ["cdylib"]      # Creates dynamic lib
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+stratum_lib = { path = "../stratum_lib" }
+
+[build-dependencies]
+cbindgen = "0.26.0"
