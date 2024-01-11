@@ -5,5 +5,5 @@
 #include "../stratum_cdylib/bindings_c.h"
 
 int main() {
-    stratum_mount();
+    stratum_inspect();
 }

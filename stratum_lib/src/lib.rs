@@ -1,4 +1,7 @@
-pub struct ExecutionContext ();
+pub mod http_helper;
+
+
+pub struct StratumContext ();
 
 pub trait Stratum {
     fn build(&self);
@@ -8,13 +11,14 @@ pub trait Stratum {
     fn pull(&self);
 }
 
-impl Stratum for ExecutionContext {
+impl Stratum for StratumContext {
     fn build(&self) {
         println!("build");
     }
 
     fn inspect(&self) {
         println!("inspect");
+        http_helper::http_helper::read_manifest();
     }
 
     fn mount(&self) {
