@@ -357,7 +357,16 @@ function main_mount() {
 		local IMAGE_DIR="${CONST_IMAGES_DIR}/${IMAGE_HASH}"
 		local IMAGE_MANIFEST_FILE="${IMAGE_DIR}/MANIFEST"
 		local IMAGE_DATA_FILE="${IMAGE_DIR}/DATA"
-		local BOUND_DIR="${CONST_BOUNDS_DIR}/${IMAGE_HASH}"
+		#
+		# wrong fs type, bad option, bad superblock on none, missing codepage or helper program, or other error.
+		# https://github.com/osfordev/stratum/issues/1
+		#
+		# Make shorter path for lowerdir
+		# for example: b653fae98d92388a48e59c3852d51a1812b6b58fe1d1dce48e0341cb47939e8e -> b653fae9
+		#   instead: /run/stratum/bound/b653fae98d92388a48e59c3852d51a1812b6b58fe1d1dce48e0341cb47939e8e
+		#   use:     /run/stratum/bound/b653fae9  
+		local IMAGE_HASH_SHORT=$(echo -n "${IMAGE_HASH}" | head -c8)
+		local BOUND_DIR="${CONST_BOUNDS_DIR}/${IMAGE_HASH_SHORT}"
 
 		if [ ! -d "${BOUND_DIR}" ]; then
 			mkdir "${BOUND_DIR}" || fatal "Failure create layer dir ${STATE_DIR}"
