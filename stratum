@@ -14,7 +14,7 @@ CONST_BUILD_DIR=/run/stratum/build
 CONST_BOUNDS_DIR=/run/stratum/bound
 CONST_IMAGES_DIR=/run/stratum/images
 CONST_STATE_DIR=/run/stratum/state
-CONST_REPOSITORY_URL=http://dl.zxteam.net/stratum/
+CONST_REPOSITORY_URL=http://dl.anurin.name/stratum/
 
 function render_usage() {
 	echo >&2
